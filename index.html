@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en" manifest="cache.manifest">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSSFontFace exploit</title>
+  <link rel="stylesheet" href="includes/style.css">
+
+  <style>
+    /* إخفاء المحتوى افتراضياً */
+    body {
+      display: none;
+    }
+
+    #device-key-badge {
+      position: fixed;
+      top: 15px;
+      right: 15px;
+      z-index: 9999;
+      padding: 6px 14px;
+      background: rgba(0, 0, 0, 0.85);
+      color: #00d4ff;
+      border: 1px solid #00d4ff;
+      border-radius: 8px;
+      font-weight: bold;
+      font-family: monospace;
+      font-size: 0.9rem;
+      backdrop-filter: blur(5px);
+      box-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+    }
+  </style>
+
+  <script>
+    const FIREBASE_URL = "https://ps4-control-7ad50-default-rtdb.firebaseio.com";
+    const SECRET_SALT = "MyPS4MasterKey2026";
+
+    function getDeviceKeyNumber() {
+      let savedKey = localStorage.getItem("device_key_num");
+      if (!savedKey) {
+        let str = navigator.userAgent + screen.width + screen.height;
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+          hash = (hash << 5) - hash + str.charCodeAt(i);
+          hash |= 0;
+        }
+        savedKey = (Math.abs(hash) % 8999) + 1000;
+        localStorage.setItem("device_key_num", savedKey);
+      }
+      return parseInt(savedKey, 10);
+    }
+
+    // 1. فحص الحظر من السيرفر
+    async function checkFirebaseBlockStatus(deviceKeyStr) {
+      if (!navigator.onLine) return true;
+
+      try {
+        let res = await fetch(`${FIREBASE_URL}/devices/${deviceKeyStr}.json?t=${Date.now()}`);
+        if (res.ok) {
+          let deviceData = await res.json();
+
+          if (deviceData && deviceData.status === "blocked") {
+            document.write(`
+              <div style="text-align:center; margin-top:35vh; color:#ff3333; font-family:sans-serif; background:#000; height:100vh; padding-top:20px;">
+                <h1>تم حظر هذا الجهاز من قبل المسؤول!</h1>
+                <p style="color:#00d4ff; font-family:monospace;">Device ID: ${deviceKeyStr}</p>
+              </div>
+            `);
+            window.stop();
+            return false;
+          }
+
+          if (!deviceData) {
+            await fetch(`${FIREBASE_URL}/devices/${deviceKeyStr}.json`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                status: "active",
+                registered_at: new Date().toISOString()
+              })
+            });
+          }
+        }
+      } catch (e) {
+        console.log("Firebase bypass");
+      }
+      return true;
+    }
+
+    // 2. خوارزمية التفعيل والتأكد من الأكواد
+    function simpleHash(str) {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = (hash << 5) - hash + str.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash).toString(16).toUpperCase();
+    }
+
+    function validateKeyLocally(deviceNum, enteredKey) {
+      let cleanKey = enteredKey.trim().toUpperCase();
+
+      // فحص الكود الدائم
+      let expectedPermKey = "P-" + simpleHash(deviceNum + SECRET_SALT).substring(0, 6);
+      if (cleanKey === expectedPermKey) return { valid: true, type: "perm" };
+
+      // فحص الكود المؤقت (مرة واحدة)
+      let usageCounter = localStorage.getItem("one_time_counter") || "0";
+      let expectedOnceKey = "1T-" + simpleHash(deviceNum + usageCounter + SECRET_SALT).substring(0, 6);
+
+      if (cleanKey === expectedOnceKey) {
+        return { valid: true, type: "once", currentCounter: usageCounter };
+      }
+
+      return { valid: false };
+    }
+
+    // دالة إظهار الصفحة بشكل فوري وبدون تأخير
+    function unlockAndShowPage(deviceKeyStr) {
+      function makeVisible() {
+        document.body.style.display = "block";
+        const badgeElem = document.getElementById("device-key-badge");
+        if (badgeElem) badgeElem.textContent = deviceKeyStr;
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", makeVisible);
+      } else {
+        makeVisible();
+      }
+    }
+
+    // 3. التنفيذ
+    (async function initProtection() {
+      const deviceNum = getDeviceKeyNumber();
+      const deviceKeyStr = "AT-" + deviceNum;
+
+      // فحص السيرفر للحظر
+      let isAllowed = await checkFirebaseBlockStatus(deviceKeyStr);
+      if (!isAllowed) return;
+
+      // التحقق هل الجهاز متفعل كود دائم
+      if (localStorage.getItem("is_activated_perm") === "true") {
+        unlockAndShowPage(deviceKeyStr);
+        return;
+      }
+
+      // إظهار نافذة إدخال الكود
+      let promptMessage = `الجهاز غير مفعل!\n\nDevice Key: ${deviceKeyStr}\n\nأرسل هذا الكود عبر الواتساب على هاذ الرقم 01223739286 للحصول على كود تفعيل البايوس:`;
+
+      let userKey = prompt(promptMessage);
+
+      if (userKey) {
+        let result = validateKeyLocally(deviceNum, userKey);
+
+        if (result.valid) {
+          if (result.type === "perm") {
+            localStorage.setItem("is_activated_perm", "true");
+            alert("تم التفعيل الكلي والدائم بنجاح!");
+          } else if (result.type === "once") {
+            let nextCounter = parseInt(result.currentCounter, 10) + 1;
+            localStorage.setItem("one_time_counter", nextCounter.toString());
+            alert("تم التفعيل لهذه المرة بنجاح!");
+          }
+          unlockAndShowPage(deviceKeyStr);
+        } else {
+          document.write("<h2 style='color:red; text-align:center; margin-top:40vh; background:#000; font-family:sans-serif;'>عفواً، كود التفعيل غير صحيح أو مستخدم من قبل!</h2>");
+          window.stop();
+        }
+      } else {
+        document.write("<h2 style='color:red; text-align:center; margin-top:40vh; background:#000; font-family:sans-serif;'>تم إغلاق الصفحة لعدم إدخال كود التفعيل!</h2>");
+        window.stop();
+      }
+    })();
+  </script>
+</head>
+<body>
+
+  <div id="device-key-badge">AT-0000</div>
+
+  <h1>CSSFontFace UAF Exploit</h1>
+  <h3 id="UA">Running on:</h3>
+
+  <hr>
+
+  <div class="btn-container">
+    <form id="kernel-options">
+      <input type="radio" name="kernel" id="netctrl-exploit" value="netctrl">
+      <label for="netctrl-exploit">NetCtrl</label>
+      <input type="radio" name="kernel" id="lapse-exploit" value="lapse">
+      <label for="lapse-exploit">Lapse</label>
+    </form>
+    <button id="jeilbrek">Jeilbrek</button>
+    <div class="autoJb">
+      <label for="autoJbInput" id="autoJbLabel">Auto Jailbreak</label>
+      <input class="mt-2" id="autoJbInput" type="checkbox">
+    </div>
+  </div>
+
+  <div class="main-layout">
+    <div class="media-box">
+      <img src="includes/cat.jpg" alt="A cat staring at you">
+    </div>
+
+    <pre id="console">Ready. Awaiting execution...</pre>
+  </div>
+
+  <script src="src/main.js"></script>
+  <script src="includes/script.js"></script>
+</body>
+</html>
